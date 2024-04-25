@@ -10,10 +10,9 @@ from sklearn.utils.class_weight import compute_class_weight
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import torch.nn.functional as F
 
-
-class GradTreePy(nn.Module):
+class GTpytorch(nn.Module):
     def __init__(self, config):
-        super(GradTreePy, self).__init__()
+        super(GTpytorch, self).__init__()
         self.config = config
         self.build_model()
 
@@ -62,31 +61,50 @@ class GradTreePy(nn.Module):
             return nn.MSELoss()
         return nn.CrossEntropyLoss()  # Default case
 
+def hardmax(logits):
+    # Create a one-hot tensor with the maximum entry set to 1
+    return (logits == logits.max(dim=-1, keepdim=True)[0]).float()
+
+def entmax15(logits, dim=-1, alpha=1.5):
+    # Approximation to the entmax activation; 1.5 aims for a middle ground between softmax (2) and sparsemax (1)
+    t = torch.relu(logits)
+    return F.softmax(t ** alpha, dim=dim)
+
 class GradTreeBlock(nn.Module):
     def __init__(self, config):
         super(GradTreeBlock, self).__init__()
-        self.config = config
         self.depth = config.get('depth', 6)
-        self.init_layers()
+        self.n_estimators = config.get('n_estimators', 1)  # Number of trees if ensemble method is used
+        self.input_dim = config.get('input_dim', 10)
+        self.num_classes = config.get('output_dim', 2)  # Output dimension or number of classes
 
-    def init_layers(self):
-        # Initialize layers based on depth and type of tree
-        self.layers = nn.ModuleList([nn.Linear(1, 1) for _ in range(self.depth)])  # Simplified
+        # Weights for internal nodes
+        self.T = nn.Parameter(torch.randn(self.n_estimators, 2**self.depth - 1, self.input_dim))
+        # Weights for leaf nodes
+        self.L = nn.Parameter(torch.randn(self.n_estimators, 2**self.depth, self.num_classes))
 
     def forward(self, x):
-        # Simplified forward pass
-        for layer in self.layers:
-            x = F.relu(layer(x))
-        return x
+        # Applying entmax and the ST operator
+        I = entmax15(self.T)
+        c1 = I - hardmax(I)  # ST operator
+        I = I - c1
 
-# Configuration and model instantiation example
-config = {
-    'input_dim': 10,
-    'output_dim': 2,
-    'learning_rate': 0.001,
-    'depth': 6,
-    'objective': 'classification'
-}
-model = GradTreePy(config)
+        y_hat = torch.zeros((x.size(0), self.num_classes), device=x.device)
+
+        # Loop over all leaf nodes
+        for l in range(2**self.depth):
+            p = torch.tensor(1.0, device=x.device)
+            # Loop over depth of the tree
+            for j in range(1, self.depth + 1):
+                idx = int(2**(j-1) + (l // 2**(self.depth - (j - 1))) - 1)
+                s = torch.einsum('bi,ij->bj', self.T[:, idx, :], I[:, idx, :]) - torch.einsum('bi,ij->bj', x, I[:, idx, :])
+                c2 = s - torch.floor(s)  # ST operator
+                s = s - c2
+                p = p * ((1 - ((l // 2**(self.depth - j)) % 2)) * s + ((l // 2**(self.depth - j)) % 2) * (1 - s))
+            y_hat += self.L[:, l, :] * p.unsqueeze(-1)  # Equation 1
+
+        return F.softmax(y_hat, dim=-1)  # Softmax to get probability distribution
+
+
 
 
