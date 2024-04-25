@@ -1,54 +1,63 @@
-import os
-import numpy as np
+import openml
+import torch
 import pandas as pd
+from GTpytorch import GTpytorch
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
-from sklearn.preprocessing import LabelEncoder
+import numpy as np
+import category_encoders as ce
 
-os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
+# Load data
+dataset = openml.datasets.get_dataset(40536)
+X, y, categorical_indicator, attribute_names = dataset.get_data(target=dataset.default_target_attribute)
 
-# Assuming the models are classes named GradTree and GradTreePy in their respective files
-from GradTree import GradTree
-from GTpytorch import GradTreePy
+X_temp, X_test, y_temp, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+X_train, X_valid, y_train, y_valid = train_test_split(X_temp, y_temp, test_size=0.2, random_state=42)
 
-# Load the data
-iris_data_path = "iris.data"
-column_names = ['sepal_length', 'sepal_width', 'petal_length', 'petal_width', 'class']
-iris_df = pd.read_csv(iris_data_path, header=None, names=column_names)
+print("Training set size:", len(X_train))
+print("Validation set size:", len(X_valid))
+print("Test set size:", len(X_test))
 
-# Handle missing values (if any)
-iris_df.fillna(iris_df.median(), inplace=True)
+categorical_feature_indices = [attribute_names[i] for i, is_cat in enumerate(categorical_indicator) if is_cat]
+existing_categorical_features = [col for col in categorical_feature_indices if col in X_train.columns]
 
-# Encode class labels as integers
-label_encoder = LabelEncoder()
-iris_df['class'] = label_encoder.fit_transform(iris_df['class'])
+encoder = ce.OrdinalEncoder(cols=existing_categorical_features)
+X_train = encoder.fit_transform(X_train)
+X_valid = encoder.transform(X_valid)
+X_test = encoder.transform(X_test)
 
-X = iris_df.drop('class', axis=1)
-y = iris_df['class']
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+# Ensure y data is in the correct format
+if isinstance(y_train, pd.Series):
+    y_train = y_train.values  # Convert to numpy array if it's a pandas Series
+if isinstance(y_valid, pd.Series):
+    y_valid = y_valid.values
+if isinstance(y_test, pd.Series):
+    y_test = y_test.values
 
+# Assuming y data needs to be encoded as float and is already in numpy format
+y_train = torch.tensor(y_train.astype(np.float32), dtype=torch.float32)
+y_valid = torch.tensor(y_valid.astype(np.float32), dtype=torch.float32)
+y_test = torch.tensor(y_test.astype(np.float32), dtype=torch.float32)
+
+# Convert DataFrames to numpy arrays and then to tensors
+X_train = torch.tensor(X_train.values, dtype=torch.float32)
+X_valid = torch.tensor(X_valid.values, dtype=torch.float32)
+X_test = torch.tensor(X_test.values, dtype=torch.float32)
+
+# Model configuration
 config = {
-    'input_dim': 4,
-    'output_dim': 3,
-    'epochs': 10
+    'input_dim': X_train.shape[1],
+    'output_dim': 2,  # Assuming binary classification; adjust as necessary
+    'depth': 6,
+    'learning_rate': 0.01,
+    'objective': 'binary'
 }
 
-# Prepare TensorFlow model
-tf_model = GradTree(config=config)
-# Ensure that your TensorFlow model is designed to handle integer labels if it is not expecting one-hot encoding
-tf_model.train(X_train, y_train, epochs=config['epochs'])
+# Create and train the model
+model = GTpytorch(config)
+model.fit(X_train=X_train, y_train=y_train, X_val=X_valid, y_val=y_valid)
 
-# Prepare PyTorch model
-torch_model = GradTreePy(config=config)
-torch_model.train(X_train, y_train, epochs=config['epochs'])
+# Predictions
+preds_gradtree = model.predict(X_test)
 
-y_pred_tf = tf_model.predict(X_test)
-y_pred_torch = torch_model.predict(X_test)
+print("Training complete")
 
-# Calculate accuracy
-accuracy_tf = accuracy_score(y_test, np.argmax(y_pred_tf, axis=1)) if len(y_pred_tf.shape) > 1 else accuracy_score(y_test, y_pred_tf)
-accuracy_torch = accuracy_score(y_test, y_pred_torch)
-
-# Print comparison
-print(f"TensorFlow Model Accuracy: {accuracy_tf}")
-print(f"PyTorch Model Accuracy: {accuracy_torch}")
