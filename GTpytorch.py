@@ -103,6 +103,9 @@ class GradTreeBlock(nn.Module):
                 p = p * ((1 - ((l // 2**(self.depth - j)) % 2)) * s + ((l // 2**(self.depth - j)) % 2) * (1 - s))
             y_hat += self.L[:, l, :] * p.unsqueeze(-1)  # Equation 1
 
+        print("Shape of self.L[:, l, :]:", self.L[:, l, :].shape)
+        print("Shape of p.unsqueeze(-1):", p.unsqueeze(-1).shape)
+
         return F.softmax(y_hat, dim=-1)  # Softmax to get probability distribution
 
 
