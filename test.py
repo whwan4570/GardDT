@@ -46,7 +46,7 @@ X_test = torch.tensor(X_test.values, dtype=torch.float32)
 # Model configuration
 config = {
     'input_dim': X_train.shape[1],
-    'output_dim': 2,  # Assuming binary classification; adjust as necessary
+    'output_dim': 2, 
     'depth': 6,
     'learning_rate': 0.01,
     'objective': 'binary'
